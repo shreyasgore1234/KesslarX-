@@ -1,7 +1,6 @@
-import { Suspense, lazy, useState, useRef } from 'react';
-import { type Satellite } from '../data/mockData';
+import { Suspense, lazy, useState, useRef, useCallback } from 'react';
 import ObjectDetailsPanel from '../components/dashboard/ObjectDetailsPanel';
-import type { CesiumGlobeRef } from '../components/dashboard/CesiumGlobe';
+import type { CesiumGlobeRef, FollowState } from '../components/dashboard/CesiumGlobe';
 import { useSatellites } from '../hooks/useKesslerAPI';
 
 const CesiumGlobe = lazy(() => import('../components/dashboard/CesiumGlobe'));
@@ -18,10 +17,11 @@ const defaultFilters: Record<string, boolean> = {
 
 export default function OrbitalMap() {
   const { satellites, loading } = useSatellites();
-  const [selectedObject, setSelectedObject] = useState<Satellite | null>(null);
+  const [selectedObject, setSelectedObject] = useState<any | null>(null);
   const [filters, setFilters] = useState(defaultFilters);
   const [showFilters, setShowFilters] = useState(true);
   const [isUIHidden, setIsUIHidden] = useState(false);
+  const [followState, setFollowState] = useState<FollowState>({ mode: 'FREE' });
   const globeRef = useRef<CesiumGlobeRef>(null);
 
   // Statistics from real data
@@ -31,6 +31,20 @@ export default function OrbitalMap() {
   const toggleFilter = (key: string) => {
     setFilters((prev) => ({ ...prev, [key]: !prev[key] }));
   };
+
+  const handleFollowStateChange = useCallback((state: FollowState) => {
+    setFollowState(state);
+  }, []);
+
+  const handleFollowSatellite = useCallback(() => {
+    if (selectedObject) {
+      globeRef.current?.flyToSatellite(selectedObject.NORAD_CAT_ID?.toString() || selectedObject.id);
+    }
+  }, [selectedObject]);
+
+  const handleStopFollowing = useCallback(() => {
+    globeRef.current?.stopFollowing();
+  }, []);
 
   return (
     <div className="absolute inset-0 z-0 bg-[#060e20] overflow-hidden">
@@ -64,13 +78,76 @@ export default function OrbitalMap() {
                 </div>
               </div>
             ) : (
-              <CesiumGlobe ref={globeRef} satellites={satellites} onSelectObject={setSelectedObject} filters={filters} />
+              <CesiumGlobe
+                ref={globeRef}
+                satellites={satellites}
+                onSelectObject={setSelectedObject}
+                filters={filters}
+                onFollowStateChange={handleFollowStateChange}
+              />
             )}
           </div>
         </Suspense>
       </div>
 
-      <ObjectDetailsPanel satelliteData={selectedObject} onClose={() => setSelectedObject(null)} />
+      <ObjectDetailsPanel
+        satelliteData={selectedObject}
+        onClose={() => {
+          // Exit follow mode when closing panel
+          if (followState.mode !== 'FREE') {
+            globeRef.current?.stopFollowing();
+          }
+          setSelectedObject(null);
+        }}
+        followState={followState}
+        onFollowSatellite={handleFollowSatellite}
+        onStopFollowing={handleStopFollowing}
+      />
+
+      {/* ── Follow Mode HUD Indicator ────────────────── */}
+      {followState.mode !== 'FREE' && !isUIHidden && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-40 pointer-events-auto">
+          <div
+            className="flex items-center gap-3 px-4 py-2.5 rounded-full"
+            style={{
+              background: followState.mode === 'FOLLOWING'
+                ? 'rgba(16, 185, 129, 0.15)'
+                : 'rgba(0, 174, 239, 0.15)',
+              border: `1px solid ${followState.mode === 'FOLLOWING'
+                ? 'rgba(16, 185, 129, 0.3)'
+                : 'rgba(0, 174, 239, 0.3)'}`,
+              backdropFilter: 'blur(12px)',
+            }}
+          >
+            <div
+              className="w-2 h-2 rounded-full animate-pulse"
+              style={{
+                background: followState.mode === 'FOLLOWING' ? '#10B981' : '#00AEEF',
+                boxShadow: `0 0 6px ${followState.mode === 'FOLLOWING' ? '#10B981' : '#00AEEF'}`,
+              }}
+            />
+            <span
+              className="text-[11px] font-label-mono uppercase tracking-widest"
+              style={{ color: followState.mode === 'FOLLOWING' ? '#10B981' : '#00AEEF' }}
+            >
+              {followState.mode === 'FOCUSING' ? 'Focusing' : 'Following'} · {followState.targetName}
+            </span>
+            {followState.mode === 'FOLLOWING' && (
+              <button
+                onClick={handleStopFollowing}
+                className="ml-1 text-[10px] font-label-mono uppercase tracking-widest px-2.5 py-1 rounded-full transition-all hover:brightness-125"
+                style={{
+                  background: 'rgba(239, 68, 68, 0.2)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  color: '#EF4444',
+                }}
+              >
+                Exit
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* UI Visibility Toggle (Always Visible) */}
       <button 
