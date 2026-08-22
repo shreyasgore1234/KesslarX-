@@ -1,19 +1,32 @@
 import { useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { X, MapPin, Gauge, Clock, Compass, Shield, Download } from 'lucide-react';
+import { X, MapPin, Gauge, Clock, Compass, Shield, Download, Crosshair, Satellite } from 'lucide-react';
 import StatusBadge from '../ui/StatusBadge';
 import * as satellite from 'satellite.js';
 import { jsPDF } from 'jspdf';
 import html2canvas from 'html2canvas';
+import { getSatelliteMedia, type SatelliteMedia } from '../../data/satelliteMedia';
+import type { FollowState } from './CesiumGlobe';
 
 interface ObjectDetailsPanelProps {
   satelliteData: any | null;
   onClose: () => void;
+  followState?: FollowState;
+  onFollowSatellite?: () => void;
+  onStopFollowing?: () => void;
 }
 
-export default function ObjectDetailsPanel({ satelliteData, onClose }: ObjectDetailsPanelProps) {
+export default function ObjectDetailsPanel({
+  satelliteData,
+  onClose,
+  followState,
+  onFollowSatellite,
+  onStopFollowing,
+}: ObjectDetailsPanelProps) {
   const panelRef = useRef<HTMLDivElement>(null);
   const [isExporting, setIsExporting] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
+  const [imageError, setImageError] = useState(false);
 
   // Parse TLE to get real stats
   let altitude = 'Unknown';
@@ -64,6 +77,14 @@ export default function ObjectDetailsPanel({ satelliteData, onClose }: ObjectDet
   const deltaV = (collisionRisk * 0.15).toFixed(2);
   const deltaTheta = (collisionRisk * 0.08).toFixed(2);
 
+  // Satellite media lookup
+  const objectName = satelliteData?.OBJECT_NAME || satelliteData?.name || '';
+  const media: SatelliteMedia | null = objectName ? getSatelliteMedia(objectName) : null;
+
+  // Follow mode state
+  const isFollowing = followState?.mode === 'FOLLOWING' && followState.targetId === satelliteData?.NORAD_CAT_ID?.toString();
+  const isFocusing = followState?.mode === 'FOCUSING' && followState.targetId === satelliteData?.NORAD_CAT_ID?.toString();
+
   const handleExportPDF = async () => {
     if (!panelRef.current || !satelliteData) return;
     setIsExporting(true);
@@ -113,7 +134,7 @@ export default function ObjectDetailsPanel({ satelliteData, onClose }: ObjectDet
           animate={{ opacity: 1, x: 0 }}
           exit={{ opacity: 0, x: 30 }}
           transition={{ duration: 0.3 }}
-          className="absolute top-4 right-4 w-80 z-20"
+          className="absolute top-4 right-4 w-80 z-20 max-h-[calc(100vh-120px)] overflow-y-auto custom-scrollbar"
         >
           <div ref={panelRef} className="glass-panel-strong p-5 rounded-xl border border-primary/20" style={{ background: 'rgba(6, 14, 32, 0.85)', backdropFilter: 'blur(16px)' }}>
             <div className="flex items-center justify-between mb-4">
@@ -138,6 +159,100 @@ export default function ObjectDetailsPanel({ satelliteData, onClose }: ObjectDet
                 {satelliteData.CATEGORY || satelliteData.OBJECT_TYPE || 'UNKNOWN'}
               </span>
               <span className="text-[11px] font-space" style={{ color: '#64748B' }}>NORAD: {satelliteData.NORAD_CAT_ID}</span>
+            </div>
+
+            {/* ── Satellite Image Section ────────────────────── */}
+            <div className="mb-5">
+              {media ? (
+                <div>
+                  {/* Image container */}
+                  <div
+                    className="relative w-full rounded-lg overflow-hidden"
+                    style={{
+                      aspectRatio: '16 / 10',
+                      background: '#0a1628',
+                      border: '1px solid rgba(0, 174, 239, 0.15)',
+                    }}
+                  >
+                    {/* Loading skeleton */}
+                    {!imageLoaded && !imageError && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="text-center">
+                          <div
+                            className="w-6 h-6 rounded-full border-2 border-primary/30 mx-auto mb-2"
+                            style={{ borderTopColor: 'transparent', animation: 'spin 1s linear infinite' }}
+                          />
+                          <span className="text-[10px] font-label-mono text-outline uppercase tracking-widest">
+                            Loading Image...
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error state */}
+                    {imageError && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="text-center px-4">
+                          <Satellite className="w-8 h-8 mx-auto mb-2" style={{ color: '#64748B' }} />
+                          <span className="text-[10px] font-label-mono text-outline uppercase tracking-widest block">
+                            Spacecraft Image Unavailable
+                          </span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Actual image */}
+                    <img
+                      src={media.imageUrl}
+                      alt={media.displayLabel}
+                      className="w-full h-full transition-opacity duration-300"
+                      style={{
+                        objectFit: 'cover',
+                        opacity: imageLoaded && !imageError ? 1 : 0,
+                      }}
+                      onLoad={() => { setImageLoaded(true); setImageError(false); }}
+                      onError={() => { setImageError(true); setImageLoaded(false); }}
+                      loading="lazy"
+                    />
+                  </div>
+
+                  {/* Image label + attribution */}
+                  <div className="mt-2 space-y-1">
+                    {media.imageType !== 'exact' && (
+                      <p className="text-[10px] font-label-mono uppercase tracking-wider" style={{ color: '#EAB308' }}>
+                        {media.displayLabel}
+                      </p>
+                    )}
+                    <p className="text-[10px] font-label-mono" style={{ color: '#64748B' }}>
+                      Image:{' '}
+                      <a
+                        href={media.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="underline hover:text-primary transition-colors"
+                      >
+                        {media.sourceName}
+                      </a>
+                      {' · '}{media.attribution.split('/').pop()?.trim()}
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                /* No image available fallback */
+                <div
+                  className="w-full rounded-lg flex flex-col items-center justify-center py-6"
+                  style={{
+                    aspectRatio: '16 / 10',
+                    background: 'rgba(10, 22, 40, 0.6)',
+                    border: '1px solid rgba(100, 116, 139, 0.2)',
+                  }}
+                >
+                  <Satellite className="w-10 h-10 mb-3" style={{ color: '#334155' }} />
+                  <span className="text-[10px] font-label-mono text-outline uppercase tracking-widest text-center leading-relaxed">
+                    No Public Spacecraft<br />Image Available
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="space-y-4 mb-6">
@@ -186,6 +301,62 @@ export default function ObjectDetailsPanel({ satelliteData, onClose }: ObjectDet
 
             {!isExporting && (
               <div className="flex flex-col gap-2">
+                {/* Follow Satellite Button */}
+                {onFollowSatellite && onStopFollowing && (
+                  isFollowing ? (
+                    <button
+                      onClick={onStopFollowing}
+                      id="exit-follow-btn"
+                      className="w-full py-2.5 rounded-lg text-xs font-space font-semibold tracking-wider transition-all duration-200 flex items-center justify-center gap-2"
+                      style={{
+                        background: 'rgba(16, 185, 129, 0.2)',
+                        border: '1px solid rgba(16, 185, 129, 0.4)',
+                        color: '#10B981',
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.background = 'rgba(239, 68, 68, 0.2)';
+                        e.currentTarget.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                        e.currentTarget.style.color = '#EF4444';
+                        e.currentTarget.querySelector('span')!.textContent = 'EXIT FOLLOW';
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(16, 185, 129, 0.2)';
+                        e.currentTarget.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                        e.currentTarget.style.color = '#10B981';
+                        e.currentTarget.querySelector('span')!.textContent = 'FOLLOWING';
+                      }}
+                    >
+                      <Crosshair className="w-4 h-4" />
+                      <span>FOLLOWING</span>
+                    </button>
+                  ) : (
+                    <button
+                      onClick={onFollowSatellite}
+                      disabled={isFocusing}
+                      id="follow-satellite-btn"
+                      className="w-full py-2.5 rounded-lg text-xs font-space font-semibold tracking-wider transition-all duration-200 flex items-center justify-center gap-2 disabled:opacity-50"
+                      style={{
+                        background: 'rgba(0, 174, 239, 0.15)',
+                        border: '1px solid rgba(0, 174, 239, 0.3)',
+                        color: '#00AEEF',
+                      }}
+                      onMouseEnter={(e) => {
+                        if (!isFocusing) {
+                          e.currentTarget.style.background = 'rgba(0, 174, 239, 0.25)';
+                          e.currentTarget.style.boxShadow = '0 0 15px rgba(0,174,239,0.2)';
+                        }
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.background = 'rgba(0, 174, 239, 0.15)';
+                        e.currentTarget.style.boxShadow = 'none';
+                      }}
+                    >
+                      <Crosshair className="w-4 h-4" />
+                      {isFocusing ? 'FOCUSING...' : 'FOLLOW SATELLITE'}
+                    </button>
+                  )
+                )}
+
                 <button
                   onClick={handleExportPDF}
                   className="w-full py-2.5 rounded-lg text-xs font-space font-semibold tracking-wider transition-all duration-200 flex items-center justify-center gap-2"

@@ -1,6 +1,15 @@
-import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useRef, useState, useCallback, forwardRef, useImperativeHandle } from 'react';
 import { motion } from 'framer-motion';
 import * as satellite from 'satellite.js';
+
+// ── Follow Mode Types ───────────────────────────────────────
+export type CameraMode = 'FREE' | 'FOCUSING' | 'FOLLOWING';
+
+export interface FollowState {
+  mode: CameraMode;
+  targetId?: string;
+  targetName?: string;
+}
 
 // Set CESIUM_BASE_URL before importing Cesium so Workers/Assets can be located
 // vite-plugin-cesium defines CESIUM_BASE_URL via Vite's `define` in dev mode
@@ -19,6 +28,7 @@ interface CesiumGlobeProps {
   satellites: any[];
   onSelectObject?: (sat: any | null) => void;
   filters?: Record<string, boolean>;
+  onFollowStateChange?: (state: FollowState) => void;
 }
 
 export interface CesiumGlobeRef {
@@ -26,6 +36,9 @@ export interface CesiumGlobeRef {
   zoomOut: () => void;
   zenithView: () => void;
   toggleAutoRotate: () => void;
+  flyToSatellite: (noradId: string) => void;
+  stopFollowing: () => void;
+  getFollowState: () => FollowState;
 }
 
 // Wait for the global Cesium object to be available (loaded by vite-plugin-cesium via script tag)
@@ -106,13 +119,23 @@ function buildOrbitPath(
   return positions;
 }
 
-const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, onSelectObject, filters }, ref) => {
+const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, onSelectObject, filters, onFollowStateChange }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
   const entitiesRef = useRef<any[]>([]);
   const autoRotateEnabledRef = useRef<boolean>(true);
+  const autoRotateWasEnabledRef = useRef<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [cesiumReady, setCesiumReady] = useState(false);
+  const followStateRef = useRef<FollowState>({ mode: 'FREE' });
+  const selectedEntityOriginalRef = useRef<{ pixelSize: number; outlineWidth: number; entity: any } | null>(null);
+  const onFollowStateChangeRef = useRef(onFollowStateChange);
+  onFollowStateChangeRef.current = onFollowStateChange;
+
+  const emitFollowState = useCallback((state: FollowState) => {
+    followStateRef.current = state;
+    onFollowStateChangeRef.current?.(state);
+  }, []);
 
   useImperativeHandle(ref, () => ({
     zoomIn: () => {
@@ -128,6 +151,12 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
     zenithView: () => {
       const Cesium = (window as any).Cesium;
       if (viewerRef.current && !viewerRef.current.isDestroyed() && Cesium) {
+        // Exit follow mode first
+        if (followStateRef.current.mode !== 'FREE') {
+          viewerRef.current.trackedEntity = undefined;
+          emitFollowState({ mode: 'FREE' });
+          autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
+        }
         viewerRef.current.camera.flyTo({
           destination: Cesium.Cartesian3.fromDegrees(20, 20, 20000000),
           duration: 1.5,
@@ -136,8 +165,111 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
     },
     toggleAutoRotate: () => {
       autoRotateEnabledRef.current = !autoRotateEnabledRef.current;
-    }
+      autoRotateWasEnabledRef.current = autoRotateEnabledRef.current;
+    },
+    flyToSatellite: (noradId: string) => {
+      const viewer = viewerRef.current;
+      const Cesium = (window as any).Cesium;
+      if (!viewer || viewer.isDestroyed() || !Cesium) return;
+
+      // Find the entity by NORAD ID
+      const entity = viewer.entities.getById(noradId);
+      if (!entity) return;
+
+      // Restore previous highlighted entity
+      restoreEntityHighlight();
+
+      // Highlight the new entity
+      highlightEntity(Cesium, entity);
+
+      // Save auto-rotate state and disable during follow
+      autoRotateWasEnabledRef.current = autoRotateEnabledRef.current;
+      autoRotateEnabledRef.current = false;
+
+      // Determine camera offset based on satellite altitude
+      // Get current position to estimate altitude
+      let offset = 200000; // default 200km offset
+      try {
+        const currentTime = viewer.clock.currentTime;
+        const pos = entity.position?.getValue(currentTime);
+        if (pos) {
+          const carto = Cesium.Cartographic.fromCartesian(pos);
+          const altKm = carto.height / 1000;
+          // Scale offset: LEO (~500km) → 150km offset, GEO (~36000km) → 2000km offset
+          offset = Math.max(100000, Math.min(3000000, altKm * 300));
+        }
+      } catch (_e) { /* use default offset */ }
+
+      // Emit FOCUSING state
+      emitFollowState({
+        mode: 'FOCUSING',
+        targetId: noradId,
+        targetName: entity.name || noradId,
+      });
+
+      // Use Cesium's native flyTo then set trackedEntity
+      viewer.flyTo(entity, {
+        duration: 2.0,
+        offset: new Cesium.HeadingPitchRange(
+          0,
+          Cesium.Math.toRadians(-30),
+          offset
+        ),
+      }).then(() => {
+        if (viewer.isDestroyed()) return;
+        // Set tracked entity — Cesium will continuously follow it
+        viewer.trackedEntity = entity;
+        emitFollowState({
+          mode: 'FOLLOWING',
+          targetId: noradId,
+          targetName: entity.name || noradId,
+        });
+      });
+    },
+    stopFollowing: () => {
+      const viewer = viewerRef.current;
+      if (!viewer || viewer.isDestroyed()) return;
+
+      viewer.trackedEntity = undefined;
+      autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
+      emitFollowState({ mode: 'FREE' });
+      // Note: we do NOT restore entity highlight here — satellite stays selected/highlighted
+    },
+    getFollowState: () => followStateRef.current,
   }));
+
+  // ── Entity Highlight Helpers ──────────────────────────────
+  function highlightEntity(Cesium: any, entity: any) {
+    if (!entity?.point) return;
+    // Save original values
+    selectedEntityOriginalRef.current = {
+      pixelSize: entity.point.pixelSize?.getValue(viewerRef.current?.clock?.currentTime) || 6,
+      outlineWidth: entity.point.outlineWidth?.getValue(viewerRef.current?.clock?.currentTime) || 1,
+      entity,
+    };
+    // Apply highlight
+    entity.point.pixelSize = 14;
+    entity.point.outlineWidth = 3;
+    entity.point.outlineColor = Cesium.Color.fromCssColorString('#00AEEF').withAlpha(0.9);
+    // Make label always visible when selected
+    entity.label.scaleByDistance = new Cesium.NearFarScalar(1e3, 1.2, 5e7, 0.6);
+    entity.label.translucencyByDistance = new Cesium.NearFarScalar(1e3, 1, 5e7, 0.8);
+  }
+
+  function restoreEntityHighlight() {
+    const Cesium = (window as any).Cesium;
+    const prev = selectedEntityOriginalRef.current;
+    if (prev?.entity && !prev.entity.entityCollection?._owner?.isDestroyed?.()) {
+      try {
+        prev.entity.point.pixelSize = prev.pixelSize;
+        prev.entity.point.outlineWidth = prev.outlineWidth;
+        prev.entity.point.outlineColor = Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.3);
+        prev.entity.label.scaleByDistance = new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0);
+        prev.entity.label.translucencyByDistance = new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0);
+      } catch (_e) { /* entity may have been removed */ }
+    }
+    selectedEntityOriginalRef.current = null;
+  }
 
   useEffect(() => {
     let viewer: any = null;
@@ -252,12 +384,38 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
           if (Cesium.defined(picked) && picked.id) {
             const sat = satellites.find((s) => s.NORAD_CAT_ID.toString() === picked.id.id);
             if (sat && onSelectObject) {
+              // Restore previous highlight
+              restoreEntityHighlight();
+              // Highlight new entity
+              const entity = viewer.entities.getById(sat.NORAD_CAT_ID.toString());
+              if (entity) highlightEntity(Cesium, entity);
               onSelectObject(sat);
             }
           } else if (onSelectObject) {
+            restoreEntityHighlight();
+            // Exit follow mode when clicking empty space
+            if (followStateRef.current.mode !== 'FREE') {
+              viewer.trackedEntity = undefined;
+              autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
+              emitFollowState({ mode: 'FREE' });
+            }
             onSelectObject(null);
           }
         }, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+        // ── Detect user camera interaction to exit follow mode ──
+        // When user drags/zooms while following, Cesium clears trackedEntity.
+        // We listen for this and update our state accordingly.
+        let lastTrackedEntity: any = undefined;
+        viewer.scene.preRender.addEventListener(() => {
+          const currentTracked = viewer.trackedEntity;
+          if (lastTrackedEntity && !currentTracked && followStateRef.current.mode === 'FOLLOWING') {
+            // User interacted — Cesium cleared tracking
+            autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
+            emitFollowState({ mode: 'FREE' });
+          }
+          lastTrackedEntity = currentTracked;
+        });
 
         setCesiumReady(true);
         setError(null);
