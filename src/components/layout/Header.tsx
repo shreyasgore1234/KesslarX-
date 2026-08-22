@@ -33,6 +33,17 @@ export default function Header({ onMenuClick, onSearchClick }: HeaderProps) {
     return () => clearInterval(interval);
   }, []);
 
+  // Handle Escape key to close user menu
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && showUserMenu) {
+        setShowUserMenu(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showUserMenu]);
+
   const pendingCount = pendingHandoffs.length;
 
   return (
@@ -87,11 +98,15 @@ export default function Header({ onMenuClick, onSearchClick }: HeaderProps) {
 
           {/* User Switcher */}
           <div className="relative">
-            <div
+            <button
+              type="button"
               onClick={() => setShowUserMenu(!showUserMenu)}
-              className="flex items-center gap-3 ml-2 hover:bg-surface-container-highest/20 p-1 rounded-full pr-4 transition-all cursor-pointer"
+              aria-haspopup="true"
+              aria-expanded={showUserMenu}
+              aria-label="Switch Demo User"
+              className="flex items-center gap-3 ml-2 hover:bg-surface-container-highest/20 p-1 rounded-full pr-4 transition-all cursor-pointer text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-primary/50"
             >
-              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border ${
+              <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold border font-label-mono ${
                 currentUser?.status === 'Offline' ? 'bg-error/20 text-error border-error/40' : 'bg-primary/20 text-primary border-primary/40'
               }`}>
                 {currentUser?.avatar_initials || '??'}
@@ -100,44 +115,64 @@ export default function Header({ onMenuClick, onSearchClick }: HeaderProps) {
                 <div className="text-xs font-bold leading-none text-on-surface">{currentUser?.name || 'Loading...'}</div>
                 <div className="text-[10px] text-on-surface-variant font-label-mono mt-0.5">{currentUser?.role || ''}</div>
               </div>
-              <span className="material-symbols-outlined text-on-surface-variant text-sm hidden lg:block">expand_more</span>
-            </div>
+              <span className={`material-symbols-outlined text-on-surface-variant text-sm hidden lg:block transition-transform duration-200 ${showUserMenu ? 'rotate-180' : ''}`}>
+                expand_more
+              </span>
+            </button>
 
             {/* Dropdown */}
             {showUserMenu && (
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowUserMenu(false)} />
-                <div className="absolute right-0 top-full mt-2 w-64 glass rounded-xl border border-primary/20 shadow-2xl z-50 overflow-hidden">
-                  <div className="p-3 border-b border-outline-variant/10">
-                    <p className="text-[10px] text-on-surface-variant uppercase tracking-wider font-bold">Switch Demo User</p>
+                <div 
+                  role="menu"
+                  aria-orientation="vertical"
+                  aria-label="Select user"
+                  className="absolute right-0 top-full mt-2 w-72 sm:w-80 max-w-[calc(100vw-2rem)] bg-[#0e172a] rounded-xl border border-outline-variant/30 shadow-2xl shadow-black/80 z-50 overflow-hidden divide-y divide-outline-variant/15"
+                >
+                  <div className="px-3.5 py-2.5 bg-surface-container-highest/20 flex items-center justify-between">
+                    <p className="text-[10px] text-on-surface-variant font-label-mono uppercase tracking-wider font-bold">Switch Demo User</p>
+                    <span className="text-[10px] text-on-surface-variant/60 font-label-mono">{allUsers.length} Users</span>
                   </div>
-                  {allUsers.map(user => (
-                    <button
-                      key={user.user_id}
-                      onClick={() => { setCurrentUser(user); setShowUserMenu(false); }}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 hover:bg-surface-container-highest/30 transition-all text-left ${
-                        currentUser?.user_id === user.user_id ? 'bg-primary/10' : ''
-                      }`}
-                    >
-                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold ${
-                        user.status === 'Offline' ? 'bg-error/20 text-error' : 'bg-primary/20 text-primary'
-                      }`}>
-                        {user.avatar_initials}
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs font-bold truncate">{user.name}</p>
-                        <p className="text-[10px] text-on-surface-variant truncate">{user.role}</p>
-                      </div>
-                      <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded-full ${
-                        user.status === 'Offline' ? 'bg-error/20 text-error' : 'bg-green-500/20 text-green-400'
-                      }`}>
-                        {user.status}
-                      </span>
-                      {currentUser?.user_id === user.user_id && (
-                        <span className="material-symbols-outlined text-primary text-sm">check</span>
-                      )}
-                    </button>
-                  ))}
+                  <div className="py-1">
+                    {allUsers.map(user => {
+                      const isSelected = currentUser?.user_id === user.user_id;
+                      const isOffline = user.status === 'Offline';
+                      return (
+                        <button
+                          key={user.user_id}
+                          role="menuitem"
+                          type="button"
+                          onClick={() => { setCurrentUser(user); setShowUserMenu(false); }}
+                          className={`w-full flex items-center gap-3 px-3.5 py-2.5 hover:bg-surface-container-highest/40 focus:bg-surface-container-highest/50 transition-all text-left group outline-none ${
+                            isSelected ? 'bg-primary/15 border-l-2 border-primary' : 'border-l-2 border-transparent'
+                          }`}
+                        >
+                          <div className={`w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold font-label-mono shrink-0 ${
+                            isOffline ? 'bg-error/20 text-error border border-error/30' : 'bg-primary/20 text-primary border border-primary/30'
+                          }`}>
+                            {user.avatar_initials}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <p className={`text-xs font-bold truncate ${isSelected ? 'text-primary' : 'text-on-surface'}`}>
+                                {user.name}
+                              </p>
+                            </div>
+                            <p className="text-[10px] text-on-surface-variant/80 font-label-mono truncate">{user.role}</p>
+                          </div>
+                          <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full font-label-mono shrink-0 ${
+                            isOffline ? 'bg-error/20 text-error border border-error/30' : 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                          }`}>
+                            {user.status}
+                          </span>
+                          {isSelected && (
+                            <span className="material-symbols-outlined text-primary text-sm shrink-0">check</span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </>
             )}
