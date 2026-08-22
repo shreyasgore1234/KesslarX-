@@ -4,6 +4,7 @@ const navItems = [
   { path: '/', label: 'Dashboard', icon: 'dashboard' },
   { path: '/orbital-map', label: 'Orbital Map', icon: 'public' },
   { path: '/collision-monitor', label: 'Collision Monitor', icon: 'warning' },
+  { path: '/handoffs', label: 'Handoffs', icon: 'swap_horiz', badge: 'New' },
   { path: '/conjunction-analysis', label: 'Conjunction Analysis', icon: 'track_changes', badge: 'New' },
   { path: '/analytics', label: 'Analytics', icon: 'bar_chart' },
   { path: '/space-weather', label: 'Space Weather', icon: 'wb_sunny' },

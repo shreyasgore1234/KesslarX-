@@ -1,4 +1,4 @@
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import asyncio
@@ -12,11 +12,20 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, List
 from dotenv import load_dotenv
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from space_track import SpaceTrackClient
 from ai_service import MockAIService
 from conjunction_engine import analyze_conjunction, CONJUNCTION_PRESETS
 from ground_station import GroundStationSimulator
+from firebase_config import init_firebase
+from handoff_service import (
+    HandoffStore, HandoffStatus, seed_demo_data,
+    create_handoff, generate_note_for_handoff, update_handoff_note,
+    confirm_handoff, accept_handoff, request_clarification,
+    respond_to_clarification, reject_handoff, escalate_handoff,
+    mark_unassigned_emergency, check_and_escalate_timeouts,
+    ESCALATION_TIMEOUT_SECONDS,
+)
 
 load_dotenv()
 
@@ -53,6 +62,30 @@ class TelemetryUpload(BaseModel):
     signal: int = -55
     velocity: float = 0.0
     orientation: dict = {}
+
+# --- Handoff Request Models ---
+
+class HandoffCreateRequest(BaseModel):
+    to_user_id: str
+    reason: str = "Shift Change"
+    priority: str = "Normal"
+    next_action: str = ""
+    deadline: str = ""
+    message: str = ""
+    include_evidence: bool = True
+
+class HandoffNoteEditRequest(BaseModel):
+    note: str
+
+class HandoffClarificationRequest(BaseModel):
+    message: str
+
+class HandoffRejectRequest(BaseModel):
+    reason: str = ""
+    reassign_to_user_id: str = ""
+
+class HandoffRespondClarificationRequest(BaseModel):
+    message: str
 
 # ============================================================
 # In-memory alert store
@@ -797,8 +830,277 @@ async def ground_station_upload(payload: TelemetryUpload):
 # Startup & Shutdown
 # ============================================================
 
+# ============================================================
+# Handoff API Endpoints
+# ============================================================
+
+@app.get("/api/users")
+async def list_users():
+    """List all available users/roles."""
+    users = HandoffStore.get_users()
+    return {"users": users}
+
+
+@app.get("/api/users/{user_id}")
+async def get_user(user_id: str):
+    """Get a single user."""
+    user = HandoffStore.get_user(user_id)
+    if not user:
+        return JSONResponse(status_code=404, content={"error": f"User {user_id} not found"})
+    return user
+
+
+@app.get("/api/events")
+async def list_events():
+    """List conjunction events with ownership info."""
+    events = HandoffStore.get_events()
+    # Enrich with owner details
+    for ev in events:
+        owner = HandoffStore.get_user(ev.get("current_owner_id", ""))
+        ev["owner"] = owner
+    return {"events": events}
+
+
+@app.get("/api/events/{event_id}")
+async def get_event(event_id: str):
+    """Get a single event with full details."""
+    event = HandoffStore.get_event(event_id)
+    if not event:
+        return JSONResponse(status_code=404, content={"error": f"Event {event_id} not found"})
+    owner = HandoffStore.get_user(event.get("current_owner_id", ""))
+    event["owner"] = owner
+    return event
+
+
+@app.post("/api/events/{event_id}/handoffs")
+async def create_event_handoff(
+    event_id: str,
+    req: HandoffCreateRequest,
+    x_user_id: str = Header(default="anish"),
+):
+    """Create a new handoff draft for an event."""
+    try:
+        handoff = create_handoff(
+            event_id=event_id,
+            from_user_id=x_user_id,
+            to_user_id=req.to_user_id,
+            reason=req.reason,
+            priority=req.priority,
+            next_action=req.next_action,
+            deadline=req.deadline,
+            message=req.message,
+            include_evidence=req.include_evidence,
+        )
+        return handoff
+    except PermissionError as e:
+        return JSONResponse(status_code=403, content={"error": str(e)})
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.get("/api/events/{event_id}/handoffs")
+async def list_event_handoffs(event_id: str):
+    """List all handoffs for an event."""
+    handoffs = HandoffStore.get_handoffs_for_event(event_id)
+    # Enrich with user details
+    for h in handoffs:
+        h["from_user"] = HandoffStore.get_user(h.get("from_user_id", ""))
+        h["to_user"] = HandoffStore.get_user(h.get("to_user_id", ""))
+    return {"handoffs": handoffs}
+
+
+@app.get("/api/events/{event_id}/timeline")
+async def get_event_timeline(event_id: str):
+    """Get the event timeline / audit trail."""
+    timeline = HandoffStore.get_timeline_for_event(event_id)
+    return {"timeline": timeline}
+
+
+@app.get("/api/handoffs/pending")
+async def get_pending_handoffs(x_user_id: str = Header(default="anish")):
+    """Get handoffs awaiting the current user."""
+    handoffs = HandoffStore.get_pending_handoffs(x_user_id)
+    for h in handoffs:
+        h["from_user"] = HandoffStore.get_user(h.get("from_user_id", ""))
+        h["to_user"] = HandoffStore.get_user(h.get("to_user_id", ""))
+        h["event"] = HandoffStore.get_event(h.get("event_id", ""))
+    return {"handoffs": handoffs}
+
+
+@app.get("/api/handoffs/{handoff_id}")
+async def get_handoff(handoff_id: str):
+    """Get a single handoff with full details."""
+    handoff = HandoffStore.get_handoff(handoff_id)
+    if not handoff:
+        return JSONResponse(status_code=404, content={"error": f"Handoff {handoff_id} not found"})
+    handoff["from_user"] = HandoffStore.get_user(handoff.get("from_user_id", ""))
+    handoff["to_user"] = HandoffStore.get_user(handoff.get("to_user_id", ""))
+    handoff["event"] = HandoffStore.get_event(handoff.get("event_id", ""))
+    handoff["history"] = HandoffStore.get_history_for_handoff(handoff_id)
+    return handoff
+
+
+@app.post("/api/handoffs/{handoff_id}/generate-note")
+async def generate_handoff_note_endpoint(handoff_id: str):
+    """Generate the structured handoff note from event data."""
+    try:
+        handoff = generate_note_for_handoff(handoff_id)
+        return handoff
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/update-note")
+async def update_handoff_note_endpoint(handoff_id: str, req: HandoffNoteEditRequest):
+    """Update the generated note (user edits)."""
+    try:
+        handoff = update_handoff_note(handoff_id, req.note)
+        return handoff
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/confirm")
+async def confirm_handoff_endpoint(
+    handoff_id: str,
+    x_user_id: str = Header(default="anish"),
+):
+    """Confirm the transfer — moves handoff to Awaiting Acceptance."""
+    try:
+        handoff = confirm_handoff(handoff_id, x_user_id)
+        return handoff
+    except (ValueError, PermissionError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/accept")
+async def accept_handoff_endpoint(
+    handoff_id: str,
+    x_user_id: str = Header(default="anish"),
+):
+    """Recipient accepts the handoff."""
+    try:
+        handoff = accept_handoff(handoff_id, x_user_id)
+        return handoff
+    except (ValueError, PermissionError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/clarification")
+async def clarification_endpoint(
+    handoff_id: str,
+    req: HandoffClarificationRequest,
+    x_user_id: str = Header(default="anish"),
+):
+    """Request clarification on a handoff."""
+    try:
+        handoff = request_clarification(handoff_id, x_user_id, req.message)
+        return handoff
+    except (ValueError, PermissionError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/respond-clarification")
+async def respond_clarification_endpoint(
+    handoff_id: str,
+    req: HandoffRespondClarificationRequest,
+    x_user_id: str = Header(default="anish"),
+):
+    """Respond to a clarification request."""
+    try:
+        handoff = respond_to_clarification(handoff_id, x_user_id, req.message)
+        return handoff
+    except (ValueError, PermissionError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/reject")
+async def reject_handoff_endpoint(
+    handoff_id: str,
+    req: HandoffRejectRequest,
+    x_user_id: str = Header(default="anish"),
+):
+    """Reject a handoff, optionally reassigning."""
+    try:
+        result = reject_handoff(
+            handoff_id, x_user_id,
+            reason=req.reason,
+            reassign_to_user_id=req.reassign_to_user_id,
+        )
+        return result
+    except (ValueError, PermissionError) as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/{handoff_id}/escalate")
+async def escalate_handoff_endpoint(handoff_id: str):
+    """Manually escalate a handoff."""
+    try:
+        handoff = escalate_handoff(handoff_id, reason="Manual escalation")
+        return handoff
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+@app.post("/api/handoffs/check-timeouts")
+async def check_timeouts_endpoint(timeout: int = None):
+    """Check and escalate timed-out handoffs. Pass ?timeout=30 for demo."""
+    escalated = check_and_escalate_timeouts(timeout_seconds=timeout)
+    return {
+        "checked": True,
+        "escalated_count": len(escalated),
+        "escalated": escalated,
+        "timeout_seconds": timeout or ESCALATION_TIMEOUT_SECONDS,
+    }
+
+
+@app.post("/api/events/{event_id}/unassigned-emergency")
+async def unassigned_emergency_endpoint(event_id: str):
+    """Mark an event as Unassigned Emergency."""
+    try:
+        event = mark_unassigned_emergency(event_id)
+        return event
+    except ValueError as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+
+# ============================================================
+# Background Escalation Check Task
+# ============================================================
+
+async def escalation_check_loop():
+    """Background task that checks for timed-out handoffs every 30 seconds."""
+    while True:
+        await asyncio.sleep(30)
+        try:
+            escalated = check_and_escalate_timeouts()
+            if escalated:
+                logger.info(f"Auto-escalated {len(escalated)} handoff(s)")
+                # Broadcast escalation alerts to WebSocket clients
+                for h in escalated:
+                    event = HandoffStore.get_event(h.get("event_id", ""))
+                    alert = {
+                        "type": "escalation_alert",
+                        "severity": "HIGH",
+                        "data": f"Handoff {h['handoff_id']} for event {h['event_id']} escalated due to timeout.",
+                        "message": f"⚠ Handoff escalated: {event['title'] if event else h['event_id']}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    await manager.broadcast(json.dumps(alert))
+        except Exception as e:
+            logger.error(f"Escalation check error: {e}")
+
+
+# ============================================================
+# Startup & Shutdown
+# ============================================================
+
 @app.on_event("startup")
 async def startup_event():
+    # Initialize Firebase (falls back to in-memory if not configured)
+    init_firebase()
+    # Seed demo handoff data
+    seed_demo_data()
     # Attempt initial login to Space-Track on startup
     await space_track_client.login()
     # Pre-warm satellite cache
@@ -807,6 +1109,8 @@ async def startup_event():
     asyncio.create_task(simulate_realtime_updates())
     # Start ground station telemetry stream
     asyncio.create_task(simulate_ground_station())
+    # Start background escalation check
+    asyncio.create_task(escalation_check_loop())
     # Seed initial alerts
     _add_alert("LOW", "System Online", "KesslerX backend initialized. All systems nominal.")
     _add_alert("MEDIUM", "Debris Cloud Detected", "New debris cluster detected in LEO sector 4-B. 14 objects tracked.")

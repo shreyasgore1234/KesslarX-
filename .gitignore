@@ -29,5 +29,15 @@ npm-debug.log*
 # Python (backend)
 __pycache__/
 *.pyc
+*/__pycache__/
+*.py[cod]
 venv/
 .pytest_cache/
+
+# Firebase / GCP credentials (NEVER commit)
+firebase-credentials.json
+*-service-account*.json
+*firebase-adminsdk*.json
+*adminsdk*.json
+*.pem
+*.key

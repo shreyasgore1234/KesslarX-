@@ -1,4 +1,17 @@
+import { useNavigate } from 'react-router-dom';
+import { useEvents } from '../hooks/useHandoffAPI';
+
 export default function CollisionMonitor() {
+  const navigate = useNavigate();
+  const { events, loading: eventsLoading } = useEvents();
+
+  const severityStyle: Record<string, { border: string; bg: string; badge: string; badgeText: string }> = {
+    CRITICAL: { border: 'border-l-error', bg: 'bg-primary-container/10', badge: 'bg-error/20 text-error', badgeText: 'CRITICAL' },
+    HIGH: { border: 'border-l-secondary', bg: '', badge: 'bg-secondary/20 text-secondary', badgeText: 'ELEVATED' },
+    MEDIUM: { border: 'border-l-on-surface-variant/30', bg: 'opacity-70', badge: 'bg-on-surface-variant/20 text-on-surface-variant', badgeText: 'NOMINAL' },
+    LOW: { border: 'border-l-on-surface-variant/20', bg: 'opacity-50', badge: 'bg-on-surface-variant/15 text-on-surface-variant', badgeText: 'LOW' },
+  };
+
   return (
     <div className="space-y-card-gap">
       {/* Dashboard Header */}
@@ -55,7 +68,7 @@ export default function CollisionMonitor() {
 
       {/* Main Workspace Grid */}
       <div className="grid grid-cols-12 gap-card-gap h-auto">
-        {/* Upcoming Close Approaches List */}
+        {/* Upcoming Close Approaches List — now dynamic */}
         <div className="col-span-12 xl:col-span-4 glass rounded-xl overflow-hidden flex flex-col">
           <div className="p-4 border-b border-outline-variant/10 flex justify-between items-center">
             <h3 className="font-headline-sm text-headline-sm flex items-center gap-2">
@@ -65,69 +78,72 @@ export default function CollisionMonitor() {
             <span className="text-[10px] font-label-mono bg-surface-container-highest px-2 py-0.5 rounded">AUTO-REFRESH: ON</span>
           </div>
           <div className="flex-1 overflow-y-auto max-h-[600px]">
-            {/* Event 1 - High Risk */}
-            <div className="p-4 border-b border-outline-variant/10 bg-primary-container/10 border-l-4 border-l-error cursor-pointer hover:bg-primary-container/20 transition-all">
-              <div className="flex justify-between items-start mb-2">
-                <div>
-                  <h4 className="font-bold text-sm">STARLINK-3021 vs DEBRIS-88172</h4>
-                  <p className="text-xs text-on-surface-variant">Conjunction ID: CX-9921-A</p>
-                </div>
-                <span className="bg-error/20 text-error text-[10px] px-2 py-0.5 rounded-full font-bold">CRITICAL</span>
+            {eventsLoading ? (
+              <div className="flex items-center justify-center py-8">
+                <div className="w-6 h-6 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
               </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">schedule</span> TCA: 12 min
+            ) : events.length > 0 ? (
+              events.map(ev => {
+                const s = severityStyle[ev.severity] || severityStyle.MEDIUM;
+                return (
+                  <div
+                    key={ev.event_id}
+                    onClick={() => navigate(`/event/${ev.event_id}`)}
+                    className={`p-4 border-b border-outline-variant/10 ${s.bg} border-l-4 ${s.border} cursor-pointer hover:bg-primary-container/20 transition-all`}
+                  >
+                    <div className="flex justify-between items-start mb-2">
+                      <div>
+                        <h4 className="font-bold text-sm">{ev.title}</h4>
+                        <p className="text-xs text-on-surface-variant">Conjunction ID: {ev.event_id}</p>
+                      </div>
+                      <span className={`${s.badge} text-[10px] px-2 py-0.5 rounded-full font-bold`}>{s.badgeText}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs">
+                      <div className="flex items-center gap-1.5 text-on-surface-variant">
+                        <span className="material-symbols-outlined text-sm">schedule</span> TCA: {ev.tca_minutes} min
+                      </div>
+                      <div className="flex items-center gap-1.5 text-on-surface-variant">
+                        <span className="material-symbols-outlined text-sm">monitoring</span> Risk: {((ev.collision_probability || 0) * 100).toFixed(1)}%
+                      </div>
+                      <div className="flex items-center gap-1.5 text-on-surface-variant">
+                        <span className="material-symbols-outlined text-sm">straighten</span> Miss: {ev.miss_distance_km} km
+                      </div>
+                      <div className="flex items-center gap-1.5 text-on-surface-variant">
+                        <span className="material-symbols-outlined text-sm">person</span>
+                        <span className="truncate">{ev.owner?.name || 'Unassigned'}</span>
+                      </div>
+                    </div>
+                    {ev.status === 'Unassigned Emergency' && (
+                      <div className="mt-2 text-[10px] text-error font-bold flex items-center gap-1">
+                        <span className="material-symbols-outlined text-[10px]">warning</span>
+                        UNASSIGNED EMERGENCY
+                      </div>
+                    )}
+                  </div>
+                );
+              })
+            ) : (
+              /* Fallback static events if API fails */
+              <>
+                <div onClick={() => navigate('/event/CX-9921-A')} className="p-4 border-b border-outline-variant/10 bg-primary-container/10 border-l-4 border-l-error cursor-pointer hover:bg-primary-container/20 transition-all">
+                  <div className="flex justify-between items-start mb-2">
+                    <div>
+                      <h4 className="font-bold text-sm">STARLINK-3021 vs DEBRIS-88172</h4>
+                      <p className="text-xs text-on-surface-variant">Conjunction ID: CX-9921-A</p>
+                    </div>
+                    <span className="bg-error/20 text-error text-[10px] px-2 py-0.5 rounded-full font-bold">CRITICAL</span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="flex items-center gap-1.5 text-on-surface-variant">
+                      <span className="material-symbols-outlined text-sm">schedule</span> TCA: 12 min
+                    </div>
+                    <div className="flex items-center gap-1.5 text-on-surface-variant">
+                      <span className="material-symbols-outlined text-sm">monitoring</span> Risk: 9.8%
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">monitoring</span> Risk: 9.8%
-                </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">straighten</span> Miss: 0.12 km
-                </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">language</span> Orbit: LEO
-                </div>
-              </div>
-            </div>
-            {/* Event 2 - Medium Risk */}
-            <div className="p-4 border-b border-outline-variant/10 cursor-pointer hover:bg-surface-container-highest/20 transition-all">
-              <div className="flex justify-between items-start mb-2">
-                <div>
-                  <h4 className="font-bold text-sm">ONEWEB-1160 vs DEBRIS-77319</h4>
-                  <p className="text-xs text-on-surface-variant">Conjunction ID: CX-8840-B</p>
-                </div>
-                <span className="bg-secondary/20 text-secondary text-[10px] px-2 py-0.5 rounded-full font-bold">ELEVATED</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">schedule</span> TCA: 1h 32m
-                </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">monitoring</span> Risk: 4.6%
-                </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">straighten</span> Miss: 1.4 km
-                </div>
-              </div>
-            </div>
-            {/* Event 3 - Low Risk */}
-            <div className="p-4 border-b border-outline-variant/10 cursor-pointer hover:bg-surface-container-highest/20 transition-all opacity-70">
-              <div className="flex justify-between items-start mb-2">
-                <div>
-                  <h4 className="font-bold text-sm">GPS IIF-11 vs DEBRIS-12444</h4>
-                  <p className="text-xs text-on-surface-variant">Conjunction ID: CX-4122-C</p>
-                </div>
-                <span className="bg-on-surface-variant/20 text-on-surface-variant text-[10px] px-2 py-0.5 rounded-full font-bold">NOMINAL</span>
-              </div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">schedule</span> TCA: 3h 15m
-                </div>
-                <div className="flex items-center gap-1.5 text-on-surface-variant">
-                  <span className="material-symbols-outlined text-sm">monitoring</span> Risk: 1.2%
-                </div>
-              </div>
-            </div>
+              </>
+            )}
           </div>
           <button onClick={() => {}} className="w-full p-3 text-xs text-primary font-bold hover:bg-primary/10 transition-all border-t border-outline-variant/10">VIEW ALL COLLISION EVENTS</button>
         </div>

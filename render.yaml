@@ -19,5 +19,7 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: FIREBASE_SERVICE_ACCOUNT_JSON
+        sync: false
     healthCheckPath: /api/health
     autoDeploy: true
