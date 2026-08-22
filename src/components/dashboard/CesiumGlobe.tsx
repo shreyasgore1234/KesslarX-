@@ -28,6 +28,9 @@ interface CesiumGlobeProps {
   satellites: any[];
   onSelectObject?: (sat: any | null) => void;
   filters?: Record<string, boolean>;
+  showOrbitLines?: boolean;
+  enableLighting?: boolean;
+  showSunMoon?: boolean;
   onFollowStateChange?: (state: FollowState) => void;
 }
 
@@ -86,10 +89,16 @@ function buildSampledPosition(
     interpolationDegree: 5,
     interpolationAlgorithm: Cesium.LagrangePolynomialApproximation,
   });
+  property.forwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
+  property.backwardExtrapolationType = Cesium.ExtrapolationType.EXTRAPOLATE;
 
-  const steps = Math.floor((durationMinutes * 60) / stepSeconds);
+  // Buffer 45 min in the past and forward to cover full animation & path display
+  const pastSeconds = 45 * 60;
+  const totalSeconds = durationMinutes * 60 + pastSeconds;
+  const steps = Math.floor(totalSeconds / stepSeconds);
+
   for (let i = 0; i <= steps; i++) {
-    const t = new Date(startDate.getTime() + i * stepSeconds * 1000);
+    const t = new Date(startDate.getTime() - pastSeconds * 1000 + i * stepSeconds * 1000);
     const pos = propagateToDate(satrec, t);
     if (!pos) continue;
     const cesiumTime = Cesium.JulianDate.fromDate(t);
@@ -119,7 +128,7 @@ function buildOrbitPath(
   return positions;
 }
 
-const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, onSelectObject, filters, onFollowStateChange }, ref) => {
+const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, onSelectObject, filters, showOrbitLines = true, enableLighting = true, showSunMoon = true, onFollowStateChange }, ref) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<any>(null);
   const entitiesRef = useRef<any[]>([]);
@@ -128,7 +137,7 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
   const [error, setError] = useState<string | null>(null);
   const [cesiumReady, setCesiumReady] = useState(false);
   const followStateRef = useRef<FollowState>({ mode: 'FREE' });
-  const selectedEntityOriginalRef = useRef<{ pixelSize: number; outlineWidth: number; entity: any } | null>(null);
+  const selectedEntityOriginalRef = useRef<{ pixelSize: number; outlineWidth: number; outlineColor?: any; color?: any; entity: any } | null>(null);
   const onFollowStateChangeRef = useRef(onFollowStateChange);
   onFollowStateChangeRef.current = onFollowStateChange;
 
@@ -187,18 +196,20 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
       autoRotateEnabledRef.current = false;
 
       // Determine camera offset based on satellite altitude
-      // Get current position to estimate altitude
-      let offset = 200000; // default 200km offset
+      let offset = 250000; // default 250km offset
       try {
         const currentTime = viewer.clock.currentTime;
         const pos = entity.position?.getValue(currentTime);
         if (pos) {
           const carto = Cesium.Cartographic.fromCartesian(pos);
           const altKm = carto.height / 1000;
-          // Scale offset: LEO (~500km) → 150km offset, GEO (~36000km) → 2000km offset
-          offset = Math.max(100000, Math.min(3000000, altKm * 300));
+          // Scale offset: LEO (~500km) → 180km offset, GEO (~36000km) → 2500km offset
+          offset = Math.max(120000, Math.min(2500000, altKm * 350));
         }
       } catch (_e) { /* use default offset */ }
+
+      // Position viewFrom so camera tracks and centers directly on the satellite point
+      entity.viewFrom = new Cesium.Cartesian3(-offset * 0.75, -offset * 0.75, offset * 0.4);
 
       // Emit FOCUSING state
       emitFollowState({
@@ -209,15 +220,15 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
 
       // Use Cesium's native flyTo then set trackedEntity
       viewer.flyTo(entity, {
-        duration: 2.0,
+        duration: 1.8,
         offset: new Cesium.HeadingPitchRange(
           0,
-          Cesium.Math.toRadians(-30),
+          Cesium.Math.toRadians(-25),
           offset
         ),
       }).then(() => {
         if (viewer.isDestroyed()) return;
-        // Set tracked entity — Cesium will continuously follow it
+        // Set tracked entity — Cesium will continuously follow the satellite dot
         viewer.trackedEntity = entity;
         emitFollowState({
           mode: 'FOLLOWING',
@@ -228,12 +239,20 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
     },
     stopFollowing: () => {
       const viewer = viewerRef.current;
+      const Cesium = (window as any).Cesium;
       if (!viewer || viewer.isDestroyed()) return;
 
       viewer.trackedEntity = undefined;
       autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
       emitFollowState({ mode: 'FREE' });
-      // Note: we do NOT restore entity highlight here — satellite stays selected/highlighted
+
+      // Fly back to default globe view
+      if (Cesium) {
+        viewer.camera.flyTo({
+          destination: Cesium.Cartesian3.fromDegrees(20, 20, 20000000),
+          duration: 1.5,
+        });
+      }
     },
     getFollowState: () => followStateRef.current,
   }));
@@ -243,17 +262,21 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
     if (!entity?.point) return;
     // Save original values
     selectedEntityOriginalRef.current = {
-      pixelSize: entity.point.pixelSize?.getValue(viewerRef.current?.clock?.currentTime) || 6,
-      outlineWidth: entity.point.outlineWidth?.getValue(viewerRef.current?.clock?.currentTime) || 1,
+      pixelSize: entity.point.pixelSize?.getValue(viewerRef.current?.clock?.currentTime) || 12,
+      outlineWidth: entity.point.outlineWidth?.getValue(viewerRef.current?.clock?.currentTime) || 1.5,
+      outlineColor: entity.point.outlineColor?.getValue(viewerRef.current?.clock?.currentTime) || Cesium.Color.WHITE.withAlpha(0.6),
       entity,
     };
-    // Apply highlight
-    entity.point.pixelSize = 14;
-    entity.point.outlineWidth = 3;
-    entity.point.outlineColor = Cesium.Color.fromCssColorString('#00AEEF').withAlpha(0.9);
-    // Make label always visible when selected
-    entity.label.scaleByDistance = new Cesium.NearFarScalar(1e3, 1.2, 5e7, 0.6);
-    entity.label.translucencyByDistance = new Cesium.NearFarScalar(1e3, 1, 5e7, 0.8);
+    // Apply bright pulsing highlight
+    entity.point.pixelSize = 18;
+    entity.point.outlineWidth = 3.5;
+    entity.point.outlineColor = Cesium.Color.fromCssColorString('#00FFFF');
+    entity.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+    if (entity.label) {
+      entity.label.scaleByDistance = new Cesium.NearFarScalar(1e3, 1.3, 5e7, 0.7);
+      entity.label.translucencyByDistance = new Cesium.NearFarScalar(1e3, 1, 5e7, 0.9);
+      entity.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+    }
   }
 
   function restoreEntityHighlight() {
@@ -263,9 +286,13 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
       try {
         prev.entity.point.pixelSize = prev.pixelSize;
         prev.entity.point.outlineWidth = prev.outlineWidth;
-        prev.entity.point.outlineColor = Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.3);
-        prev.entity.label.scaleByDistance = new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0);
-        prev.entity.label.translucencyByDistance = new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0);
+        prev.entity.point.outlineColor = Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.6);
+        prev.entity.point.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+        if (prev.entity.label) {
+          prev.entity.label.scaleByDistance = new Cesium.NearFarScalar(1e6, 1, 4e7, 0);
+          prev.entity.label.translucencyByDistance = new Cesium.NearFarScalar(1e6, 1, 4e7, 0);
+          prev.entity.label.disableDepthTestDistance = Number.POSITIVE_INFINITY;
+        }
       } catch (_e) { /* entity may have been removed */ }
     }
     selectedEntityOriginalRef.current = null;
@@ -341,10 +368,174 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
         // Continuous rendering needed for clock-driven animation
         viewer.scene.requestRenderMode = false;
 
-        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#050816');
-        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#0a1628');
+        // ── Real-time Astronomical Lighting (Sun, Moon & Earth Day/Night) ──
+        try {
+          // Ensure Sun object exists
+          if (!viewer.scene.sun) {
+            viewer.scene.sun = new Cesium.Sun();
+          }
+          viewer.scene.sun.show = showSunMoon;
+        } catch (_e) {
+          // Sun may not be supported in this Cesium build
+        }
+
+        try {
+          // Ensure Moon object exists
+          if (!viewer.scene.moon) {
+            viewer.scene.moon = new Cesium.Moon();
+          }
+          viewer.scene.moon.show = showSunMoon;
+        } catch (_e) {
+          // Moon may not be supported
+        }
+
+        try { viewer.scene.sunBloom = true; } catch (_e) { /* sunBloom not supported */ }
+
+        viewer.scene.backgroundColor = Cesium.Color.fromCssColorString('#040714');
+        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString('#081224');
         viewer.scene.globe.showGroundAtmosphere = true;
-        viewer.scene.globe.enableLighting = false;
+        viewer.scene.globe.enableLighting = enableLighting;
+
+        // ── Add Moon entity with label + orbit path ──
+        try {
+          // Compute Moon positions for one full orbit (~27.3 days)
+          // We sample every 6 hours across the orbit
+          const moonOrbitPositions: any[] = [];
+          const moonOrbitalPeriodDays = 27.3;
+          const samplesCount = 120; // every ~5.5 hours
+          const startEpoch = viewer.clock.currentTime;
+
+          for (let i = 0; i <= samplesCount; i++) {
+            const t = Cesium.JulianDate.addSeconds(
+              startEpoch,
+              (i / samplesCount) * moonOrbitalPeriodDays * 86400,
+              new Cesium.JulianDate()
+            );
+            const moonPos = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(t);
+            if (moonPos) {
+              // Transform from inertial frame to fixed frame
+              const transform = Cesium.Transforms.computeIcrfToFixedMatrix(t);
+              if (transform) {
+                const fixedPos = Cesium.Matrix3.multiplyByVector(transform, moonPos, new Cesium.Cartesian3());
+                moonOrbitPositions.push(fixedPos);
+              }
+            }
+          }
+
+          // Moon orbit polyline
+          if (moonOrbitPositions.length > 2) {
+            viewer.entities.add({
+              name: 'MoonOrbitPath',
+              polyline: {
+                positions: moonOrbitPositions,
+                width: 1.5,
+                material: new Cesium.PolylineGlowMaterialProperty({
+                  glowPower: 0.3,
+                  color: Cesium.Color.fromCssColorString('rgba(180, 190, 255, 0.35)'),
+                }),
+                arcType: Cesium.ArcType.NONE,
+              },
+            });
+          }
+
+          // Moon dot + label (uses a CallbackProperty to follow Cesium's built-in Moon position)
+          const moonPositionCb = new Cesium.CallbackProperty((time: any) => {
+            try {
+              const moonPos = Cesium.Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(time);
+              if (!moonPos) return Cesium.Cartesian3.ZERO;
+              const transform = Cesium.Transforms.computeIcrfToFixedMatrix(time);
+              if (!transform) return Cesium.Cartesian3.ZERO;
+              return Cesium.Matrix3.multiplyByVector(transform, moonPos, new Cesium.Cartesian3());
+            } catch (_e) {
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false);
+
+          viewer.entities.add({
+            id: '__moon__',
+            name: 'Moon',
+            position: moonPositionCb,
+            point: {
+              pixelSize: 10,
+              color: Cesium.Color.fromCssColorString('#E0E0E0'),
+              outlineColor: Cesium.Color.fromCssColorString('rgba(200, 200, 255, 0.6)'),
+              outlineWidth: 2,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: 'Moon',
+              font: '12px "Inter", sans-serif',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Cesium.Color.WHITE,
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -14),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('rgba(0, 0, 0, 0.5)'),
+            },
+          });
+        } catch (_e) {
+          console.warn('Moon entity/orbit not supported:', _e);
+        }
+
+        // ── Add Sun label entity ──
+        try {
+          const sunPositionCb = new Cesium.CallbackProperty((time: any) => {
+            try {
+              const sunPos = Cesium.Simon1994PlanetaryPositions.computeSunPositionInEarthInertialFrame(time);
+              if (!sunPos) return Cesium.Cartesian3.ZERO;
+              const transform = Cesium.Transforms.computeIcrfToFixedMatrix(time);
+              if (!transform) return Cesium.Cartesian3.ZERO;
+              return Cesium.Matrix3.multiplyByVector(transform, sunPos, new Cesium.Cartesian3());
+            } catch (_e) {
+              return Cesium.Cartesian3.ZERO;
+            }
+          }, false);
+
+          viewer.entities.add({
+            id: '__sun__',
+            name: 'Sun',
+            position: sunPositionCb,
+            point: {
+              pixelSize: 18,
+              color: Cesium.Color.fromCssColorString('#FFD700'),
+              outlineColor: Cesium.Color.fromCssColorString('rgba(255, 200, 50, 0.6)'),
+              outlineWidth: 3,
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+            },
+            label: {
+              text: 'Sun',
+              font: '13px "Inter", sans-serif',
+              style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+              fillColor: Cesium.Color.fromCssColorString('#FFD700'),
+              outlineColor: Cesium.Color.BLACK,
+              outlineWidth: 2,
+              verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
+              pixelOffset: new Cesium.Cartesian2(0, -16),
+              disableDepthTestDistance: Number.POSITIVE_INFINITY,
+              showBackground: true,
+              backgroundColor: Cesium.Color.fromCssColorString('rgba(0, 0, 0, 0.5)'),
+            },
+          });
+        } catch (_e) {
+          console.warn('Sun entity not supported:', _e);
+        }
+
+        // These properties may not exist in all Cesium versions — guard safely
+        try {
+          if ('dynamicAtmosphereLighting' in viewer.scene.globe) {
+            viewer.scene.globe.dynamicAtmosphereLighting = true;
+            viewer.scene.globe.dynamicAtmosphereLightingFromSun = true;
+          }
+        } catch (_e) { /* dynamic atmosphere lighting not supported */ }
+
+        try {
+          if ('nightColor' in viewer.scene.globe) {
+            viewer.scene.globe.nightColor = new Cesium.Color(0.02, 0.05, 0.12, 1.0);
+          }
+        } catch (_e) { /* nightColor not supported */ }
 
         // Add imagery - try Cesium Ion first (Bing Maps), then fall back to OSM tiles
         try {
@@ -384,16 +575,13 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
           if (Cesium.defined(picked) && picked.id) {
             const sat = satellites.find((s) => s.NORAD_CAT_ID.toString() === picked.id.id);
             if (sat && onSelectObject) {
-              // Restore previous highlight
               restoreEntityHighlight();
-              // Highlight new entity
               const entity = viewer.entities.getById(sat.NORAD_CAT_ID.toString());
               if (entity) highlightEntity(Cesium, entity);
               onSelectObject(sat);
             }
           } else if (onSelectObject) {
             restoreEntityHighlight();
-            // Exit follow mode when clicking empty space
             if (followStateRef.current.mode !== 'FREE') {
               viewer.trackedEntity = undefined;
               autoRotateEnabledRef.current = autoRotateWasEnabledRef.current;
@@ -464,7 +652,7 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
           }
 
           const color = getColor(Cesium, category);
-          const size = isDebris ? 4 : 6;
+          const size = isDebris ? 7 : 12;
           const isVisible = filters && category ? filters[category] !== false : true;
 
           // Add the satellite entity with time-varying position
@@ -477,21 +665,21 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
             point: {
               pixelSize: size,
               color: color,
-              outlineColor: Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.3),
-              outlineWidth: 1,
-              scaleByDistance: new Cesium.NearFarScalar(1.5e7, 1.5, 4e7, 0.5),
+              outlineColor: Cesium.Color.fromCssColorString('#ffffff').withAlpha(0.6),
+              outlineWidth: 1.5,
+              scaleByDistance: new Cesium.NearFarScalar(5e4, 1.8, 5e7, 0.7),
             },
             label: {
               text: name,
               font: '11px "Space Grotesk"',
-              fillColor: Cesium.Color.WHITE.withAlpha(0.8),
+              fillColor: Cesium.Color.WHITE.withAlpha(0.9),
               outlineColor: Cesium.Color.BLACK,
               outlineWidth: 2,
               style: Cesium.LabelStyle.FILL_AND_OUTLINE,
               verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
-              pixelOffset: new Cesium.Cartesian2(0, -12),
-              scaleByDistance: new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0),
-              translucencyByDistance: new Cesium.NearFarScalar(1.5e7, 1, 3e7, 0),
+              pixelOffset: new Cesium.Cartesian2(0, -14),
+              scaleByDistance: new Cesium.NearFarScalar(1e6, 1, 4e7, 0),
+              translucencyByDistance: new Cesium.NearFarScalar(1e6, 1, 4e7, 0),
             },
           };
 
@@ -503,6 +691,7 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
               width: 1.5,
               leadTime: 2700,                               // 45 min ahead
               trailTime: 2700,                              // 45 min behind
+              show: isVisible && showOrbitLines,
             };
           }
 
@@ -517,7 +706,7 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
                 positions: orbitPathPositions,
                 width: 1,
                 material: color.withAlpha(0.25),
-                show: isVisible,
+                show: isVisible && showOrbitLines,
               },
               // Store reference for filter toggling
               properties: {
@@ -544,14 +733,18 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [satellites]);
 
-  // Update entity visibility when filters change
+  // Update entity and path visibility when filters or showOrbitLines change
   useEffect(() => {
     entitiesRef.current.forEach(({ entity, category }) => {
       const shouldShow = filters ? filters[category] !== false : true;
       if (entity.show !== shouldShow) {
         entity.show = shouldShow;
       }
+      if (entity.path) {
+        entity.path.show = (shouldShow && showOrbitLines) as any;
+      }
     });
+
     // Also toggle orbit path polylines
     if (viewerRef.current && !viewerRef.current.isDestroyed()) {
       const entities = viewerRef.current.entities.values;
@@ -561,12 +754,27 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
           const cat = e.properties.category.getValue();
           const shouldShow = filters ? filters[cat] !== false : true;
           if (e.polyline) {
-            e.polyline.show = shouldShow;
+            e.polyline.show = (shouldShow && showOrbitLines) as any;
           }
         }
       }
     }
-  }, [filters]);
+  }, [filters, showOrbitLines]);
+
+  // Update Real-Time Lighting, Sun & Moon when toggles change
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+    try {
+      viewer.scene.globe.enableLighting = enableLighting;
+      if (viewer.scene.sun) {
+        viewer.scene.sun.show = showSunMoon;
+      }
+      if (viewer.scene.moon) {
+        viewer.scene.moon.show = showSunMoon;
+      }
+    } catch (_e) { /* Cesium lighting API not available */ }
+  }, [enableLighting, showSunMoon]);
 
   return (
     <motion.div

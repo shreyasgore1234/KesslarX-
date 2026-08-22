@@ -5,11 +5,12 @@
 
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useEvent, useEventHandoffs, useEventTimeline } from '../hooks/useHandoffAPI';
+import { useEvent, useEventHandoffs, useEventTimeline, useUsers } from '../hooks/useHandoffAPI';
 import { useCurrentUser } from '../components/handoff/UserContext';
 import HandoffModal from '../components/handoff/HandoffModal';
 import HandoffHistory from '../components/handoff/HandoffHistory';
 import EventTimeline from '../components/handoff/EventTimeline';
+import ReportPreviewModal from '../components/handoff/ReportPreviewModal';
 import type { HandoffEvent } from '../data/handoffTypes';
 
 function SeverityBadge({ severity }: { severity: string }) {
@@ -91,8 +92,10 @@ export default function EventWorkspace() {
   const { event, loading: eventLoading, refresh: refreshEvent } = useEvent(eventId || '');
   const { handoffs, loading: handoffsLoading, refresh: refreshHandoffs } = useEventHandoffs(eventId || '');
   const { timeline, refresh: refreshTimeline } = useEventTimeline(eventId || '');
+  const { users } = useUsers();
 
   const [showHandoffModal, setShowHandoffModal] = useState(false);
+  const [showReportModal, setShowReportModal] = useState(false);
 
   // Auto-refresh every 10s
   useEffect(() => {
@@ -162,16 +165,28 @@ export default function EventWorkspace() {
             <p className="text-sm text-on-surface-variant">Conjunction Event Workspace</p>
           </div>
 
-          {/* Transfer Button */}
-          {isOwner && (
+          {/* Action Buttons */}
+          <div className="flex gap-3 flex-wrap">
+            {/* Generate Report Button — always visible */}
             <button
-              onClick={() => setShowHandoffModal(true)}
-              className="px-5 py-3 bg-primary-container text-white rounded-xl font-bold text-sm hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 shadow-lg"
+              onClick={() => setShowReportModal(true)}
+              className="px-5 py-3 glass text-on-surface rounded-xl font-bold text-sm hover:bg-primary/10 hover:text-primary active:scale-95 transition-all flex items-center gap-2 border border-outline-variant/20"
             >
-              <span className="material-symbols-outlined">swap_horiz</span>
-              Transfer Responsibility
+              <span className="material-symbols-outlined">description</span>
+              Generate Assessment Report
             </button>
-          )}
+
+            {/* Transfer Button — owner only */}
+            {isOwner && (
+              <button
+                onClick={() => setShowHandoffModal(true)}
+                className="px-5 py-3 bg-primary-container text-white rounded-xl font-bold text-sm hover:brightness-110 active:scale-95 transition-all flex items-center gap-2 shadow-lg"
+              >
+                <span className="material-symbols-outlined">swap_horiz</span>
+                Transfer Responsibility
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -280,6 +295,19 @@ export default function EventWorkspace() {
           refreshTimeline();
         }}
       />
+
+      {/* Report Preview Modal */}
+      {currentUser && (
+        <ReportPreviewModal
+          event={event}
+          handoffs={handoffs}
+          timeline={timeline}
+          currentUser={currentUser}
+          users={users}
+          isOpen={showReportModal}
+          onClose={() => setShowReportModal(false)}
+        />
+      )}
     </div>
   );
 }

@@ -2,6 +2,9 @@ import { useState, useRef } from 'react';
 import CesiumGlobe from '../components/dashboard/CesiumGlobe';
 import ObjectDetailsPanel from '../components/dashboard/ObjectDetailsPanel';
 import { useSatellites, useWebsocket, useSpaceWeather, useCongestion, useCollisions } from '../hooks/useKesslerAPI';
+import { useEvents, useUsers } from '../hooks/useHandoffAPI';
+import { useCurrentUser } from '../components/handoff/UserContext';
+import ReportPreviewModal from '../components/handoff/ReportPreviewModal';
 
 export default function Dashboard() {
   const { satellites, loading } = useSatellites();
@@ -9,8 +12,12 @@ export default function Dashboard() {
   const { data: weather } = useSpaceWeather();
   const { data: congestion } = useCongestion();
   const { data: collisions } = useCollisions();
+  const { events } = useEvents();
+  const { users } = useUsers();
+  const { currentUser } = useCurrentUser();
   
   const [selectedSatellite, setSelectedSatellite] = useState<any>(null);
+  const [showDashboardReportModal, setShowDashboardReportModal] = useState(false);
   const globeRef = useRef<any>(null);
 
   // Stats
@@ -320,7 +327,7 @@ export default function Dashboard() {
               <span className="material-symbols-outlined text-2xl text-primary group-hover:scale-110 transition-transform">rocket_launch</span>
               Simulate
             </button>
-            <button onClick={() => showToast("Generating Mission Report PDF...")} className="flex flex-col items-center justify-center gap-2 bg-surface-container-highest/20 hover:bg-surface-container-highest/50 border border-outline-variant/30 px-3 py-4 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all hover:border-primary/50 group">
+            <button onClick={() => setShowDashboardReportModal(true)} className="flex flex-col items-center justify-center gap-2 bg-surface-container-highest/20 hover:bg-surface-container-highest/50 border border-outline-variant/30 px-3 py-4 rounded-lg text-[10px] font-bold uppercase tracking-widest transition-all hover:border-primary/50 group">
               <span className="material-symbols-outlined text-2xl text-primary group-hover:scale-110 transition-transform">description</span>
               Report
             </button>
@@ -365,6 +372,19 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Quick Actions Report Preview Modal */}
+      {showDashboardReportModal && events.length > 0 && currentUser && (
+        <ReportPreviewModal
+          event={events[0]}
+          handoffs={[]}
+          timeline={[]}
+          currentUser={currentUser}
+          users={users}
+          isOpen={showDashboardReportModal}
+          onClose={() => setShowDashboardReportModal(false)}
+        />
+      )}
     </div>
   );
 }

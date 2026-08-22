@@ -20,6 +20,7 @@ const ConjunctionAnalysis = lazy(() => import('./pages/ConjunctionAnalysis'));
 const GroundStation = lazy(() => import('./pages/GroundStation'));
 const EventWorkspace = lazy(() => import('./pages/EventWorkspace'));
 const PendingHandoffs = lazy(() => import('./pages/PendingHandoffs'));
+const TransferResponsibility = lazy(() => import('./pages/TransferResponsibility'));
 
 function PageLoader() {
   return (
@@ -77,6 +78,7 @@ export default function App() {
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/event/:eventId" element={<EventWorkspace />} />
                   <Route path="/handoffs" element={<PendingHandoffs />} />
+                  <Route path="/transfer" element={<TransferResponsibility />} />
                 </Routes>
               </Suspense>
             </div>

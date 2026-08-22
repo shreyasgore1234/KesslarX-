@@ -1,9 +1,15 @@
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useEvents } from '../hooks/useHandoffAPI';
+import { useCurrentUser } from '../components/handoff/UserContext';
+import HandoffModal from '../components/handoff/HandoffModal';
 
 export default function CollisionMonitor() {
   const navigate = useNavigate();
-  const { events, loading: eventsLoading } = useEvents();
+  const { events, loading: eventsLoading, refresh: refreshEvents } = useEvents();
+  const { currentUser } = useCurrentUser();
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null);
+  const [showHandoffModal, setShowHandoffModal] = useState(false);
 
   const severityStyle: Record<string, { border: string; bg: string; badge: string; badgeText: string }> = {
     CRITICAL: { border: 'border-l-error', bg: 'bg-primary-container/10', badge: 'bg-error/20 text-error', badgeText: 'CRITICAL' },
@@ -89,7 +95,7 @@ export default function CollisionMonitor() {
                   <div
                     key={ev.event_id}
                     onClick={() => navigate(`/event/${ev.event_id}`)}
-                    className={`p-4 border-b border-outline-variant/10 ${s.bg} border-l-4 ${s.border} cursor-pointer hover:bg-primary-container/20 transition-all`}
+                    className={`p-4 border-b border-outline-variant/10 ${s.bg} border-l-4 ${s.border} cursor-pointer hover:bg-primary-container/20 transition-all ${selectedEventId === ev.event_id ? 'bg-primary/10 ring-1 ring-primary/30' : ''}`}
                   >
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -118,6 +124,21 @@ export default function CollisionMonitor() {
                         <span className="material-symbols-outlined text-[10px]">warning</span>
                         UNASSIGNED EMERGENCY
                       </div>
+                    )}
+                    {/* Transfer Responsibility Button */}
+                    {ev.current_owner_id && ev.current_owner_id === currentUser?.user_id && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setSelectedEventId(ev.event_id);
+                          setShowHandoffModal(true);
+                        }}
+                        className="mt-2 w-full py-1.5 rounded-lg text-[10px] font-bold tracking-wider flex items-center justify-center gap-1.5 transition-all hover:brightness-110 active:scale-95"
+                        style={{ background: 'rgba(180, 197, 255, 0.15)', border: '1px solid rgba(180, 197, 255, 0.25)', color: '#B4C5FF' }}
+                      >
+                        <span className="material-symbols-outlined text-sm">swap_horiz</span>
+                        TRANSFER RESPONSIBILITY
+                      </button>
                     )}
                   </div>
                 );
@@ -261,6 +282,21 @@ export default function CollisionMonitor() {
           <button onClick={() => {}} className="px-4 py-2 bg-primary-container hover:brightness-110 text-white text-xs rounded font-bold transition-all">Execute Advice</button>
         </div>
       </div>
+
+      {/* Handoff Modal */}
+      {selectedEventId && (
+        <HandoffModal
+          eventId={selectedEventId}
+          eventTitle={events.find(e => e.event_id === selectedEventId)?.title || selectedEventId}
+          isOpen={showHandoffModal}
+          onClose={() => { setShowHandoffModal(false); setSelectedEventId(null); }}
+          onComplete={() => {
+            refreshEvents();
+            setShowHandoffModal(false);
+            setSelectedEventId(null);
+          }}
+        />
+      )}
     </div>
   );
 }
