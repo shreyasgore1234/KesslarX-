@@ -4,9 +4,9 @@
 // ============================================================
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import type {
-  HandoffUser, HandoffEvent, Handoff, TimelineEntry,
-  HandoffCreatePayload,
+import {
+  type HandoffUser, type HandoffEvent, type Handoff, type TimelineEntry,
+  type HandoffCreatePayload, DEFAULT_DEMO_USERS, DEFAULT_DEMO_EVENTS,
 } from '../data/handoffTypes';
 
 const API = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
@@ -42,15 +42,18 @@ async function handoffFetch<T>(
 // ============================================================
 
 export function useUsers() {
-  const [users, setUsers] = useState<HandoffUser[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [users, setUsers] = useState<HandoffUser[]>(DEFAULT_DEMO_USERS);
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const data = await handoffFetch<{ users: HandoffUser[] }>(`${API}/api/users`);
-      setUsers(data.users);
+      if (Array.isArray(data.users) && data.users.length > 0) {
+        setUsers(data.users);
+      }
     } catch (err) {
-      console.warn('Failed to fetch users:', err);
+      console.warn('Failed to fetch users, using default demo users:', err);
+      setUsers(DEFAULT_DEMO_USERS);
     } finally {
       setLoading(false);
     }
@@ -61,15 +64,18 @@ export function useUsers() {
 }
 
 export function useEvents() {
-  const [events, setEvents] = useState<HandoffEvent[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [events, setEvents] = useState<HandoffEvent[]>(DEFAULT_DEMO_EVENTS);
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
       const data = await handoffFetch<{ events: HandoffEvent[] }>(`${API}/api/events`);
-      setEvents(data.events);
+      if (Array.isArray(data.events) && data.events.length > 0) {
+        setEvents(data.events);
+      }
     } catch (err) {
-      console.warn('Failed to fetch events:', err);
+      console.warn('Failed to fetch events, using default demo events:', err);
+      setEvents(DEFAULT_DEMO_EVENTS);
     } finally {
       setLoading(false);
     }
@@ -80,16 +86,22 @@ export function useEvents() {
 }
 
 export function useEvent(eventId: string) {
-  const [event, setEvent] = useState<HandoffEvent | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [event, setEvent] = useState<HandoffEvent | null>(() => {
+    return DEFAULT_DEMO_EVENTS.find(e => e.event_id === eventId) || null;
+  });
+  const [loading, setLoading] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!eventId) return;
     try {
       const data = await handoffFetch<HandoffEvent>(`${API}/api/events/${eventId}`);
-      setEvent(data);
+      if (data && data.event_id) {
+        setEvent(data);
+      }
     } catch (err) {
-      console.warn('Failed to fetch event:', err);
+      console.warn(`Failed to fetch event ${eventId}, using demo fallback:`, err);
+      const fallback = DEFAULT_DEMO_EVENTS.find(e => e.event_id === eventId);
+      if (fallback) setEvent(fallback);
     } finally {
       setLoading(false);
     }
