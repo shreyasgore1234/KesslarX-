@@ -22,6 +22,9 @@ KesslerX is a production-grade aerospace dashboard for monitoring satellites, tr
 - 📋 **Reports** — Automated orbital situation reports with PDF export
 - ⚙️ **Settings** — Configurable display, notifications, API keys, and globe settings
 
+## Project Presentation
+[View KesslerX Presentation](./KesslerX-presentation.pdf)
+
 ## Tech Stack
 
 | Layer | Technology |
