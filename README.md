@@ -86,6 +86,15 @@ See [AI_LOGS/](./AI_LOGS/) for full development session history, enabling seamle
 - Orbitron + Space Grotesk + Inter typography
 - Micro-animations on hover and state change
 
+## 📚 Project Resources
+
+| Resource | Description |
+|---|---|
+| 📊 [Project Presentation](./presentation/KesslerX-Presentation.pdf) | Complete project overview and solution |
+| 🎥 [Video Walkthrough](https://youtu.be/z5Q16NOfQpM) | Watch the full project demo |
+| 🌐 [Live Demo](https://kessler-x.vercel.app/) | Explore the deployed platform |
+| 💻 [Source Code](https://github.com/Anish1302D/KesslerX) | Explore the complete implementation |
+
 ## License
 
 MIT
