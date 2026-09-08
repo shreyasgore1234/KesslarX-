@@ -730,7 +730,7 @@ const CesiumGlobe = forwardRef<CesiumGlobeRef, CesiumGlobeProps>(({ satellites, 
         viewer.destroy();
       }
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [satellites]);
 
   // Update entity and path visibility when filters or showOrbitLines change
